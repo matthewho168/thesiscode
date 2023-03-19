@@ -1,0 +1,283 @@
+---
+title: "Gaussian Mixture MOdel"
+output: pdf_document
+date: "2023-03-10"
+header-includes:
+- \newcommand{\Normal}{\mathcal{N}}
+---
+
+
+```{r, echo = FALSE, verbose = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, cache = TRUE, warning = FALSE, fig.align = 'center')
+
+library('LaplacesDemon')
+library('mvtnorm')
+library('rstan')
+```
+
+
+
+```{r}
+#Data generation.
+set.seed(2023)
+
+# Set number of data points.
+n = 100
+
+#Pick z_i as either 1 or 2.
+zvals = rbinom(n, 1, 0.5) + 1
+
+# Generating from either component
+xvals = rep(0, n)
+for (i in 1:n){
+  if (zvals[i] == 1) xvals[i] = rnorm(1, -2, 1)
+  else xvals[i] = rnorm(1, 2, 1)
+}
+```
+
+- - -
+
+Metropolis Hastings
+
+```{r}
+# Prior distribution of (mu1, sigma1) and (mu2, sigma2) is iid NormalGamma with parameters mu = 0, lambda = 0.1, alpha = 1, beta = 1
+
+mu = 0 
+lambda = 0.1
+alpha = 1
+beta = 1
+
+log_prior = function(vec){
+  # Ignoring constant of proportionality
+  x = vec[1]
+  s = vec[2]
+  a = s^(alpha - 0.5)
+  log_b = -beta * s
+  log_c = -lambda * s * (x-mu)^2 / 2
+  sum = log(a) + log_b + log_c
+  sum
+}
+
+# Equivalent to x~Unif (i.e. is constant 1)
+p_prior = function(x){
+  ddirichlet(c(x, 1-x), c(1,1))
+}
+
+log_likelihood = function(param){
+  mu1 = param[1]
+  var1 = param[2]
+  mu2 = param[3]
+  var2 = param[4]
+  p1 = param[5]
+  p2 = 1-p1
+  
+  sum = 0 
+  for (k in 1:n){
+    kprob = p1* dnorm(x = xvals[k], mean = mu1, sd = sqrt(var1)) + p2 * dnorm(xvals[k], mu2, sqrt(var2))
+    sum = sum + log(kprob)
+  }
+  sum
+}
+
+log_post = function(param){
+  sum = log_likelihood(param) + log_prior(param[1:2]) + log_prior(param[3:4])# + log(p_prior(param[5]))
+    #removing since log(1) = 0
+  sum
+}
+```
+
+
+```{r}
+dim = 5
+set.seed(2023)
+trials = 20000
+samples_mh = matrix(rep(0, dim * trials), ncol = dim)
+samples_mh[1,] = c(rnorm(1, 0, sqrt(10)), rgamma(1, 1, 1), rnorm(1, 0, sqrt(10)), rgamma(1, 1, 1), runif(1))
+
+count = 0
+
+for (i in 2:trials){
+  curr = samples_mh[i-1,]
+  prop = rmvnorm(1, mean = curr, sigma = 0.01 * diag(dim))
+  
+  if (prop[5] > 1 || prop[5] < 0 || prop[2] <= 0 || prop[4] <= 0) acce = 0
+  else acce = exp(log_post(prop) - log_post(curr))
+  
+  if(runif(1) < acce){
+    curr = prop
+    count = count + 1
+  }
+  
+  samples_mh[i,] = curr
+}
+```
+
+
+```{r}
+count/trials
+
+pairs(samples_mh, main = 'Gaussian Mixture Model, Metropolis-Hastings', labels = c('mu1', 'var1', 'mu2', 'var2', 'p1'))
+
+plot(samples_mh[,1], samples_mh[,3], xlab = 'mu1', ylab = 'mu2', main = 'Component Means of Gaussian Mixture Model')
+```
+
+```{r}
+pairs(samples_mh[-(1:5000),], main = 'Mixture Model, Metropolis-Hastings with Burn-in', labels = c('mu1', 'var1', 'mu2', 'var2', 'p1'))
+
+plot(samples_mh[-(1:5000),1], samples_mh[-(1:5000),3], xlab = 'mu1', ylab = 'mu2', main = 'Component Means of Gaussian Mixture Model')
+```
+
+- - - 
+
+Gibbs sampler.
+
+```{r}
+set.seed(2023)
+iter = 10000
+
+z_aux = rbinom(n, 1, 0.5) + 1
+
+pvals = rep(NA, n)
+p_alpha = 1
+p_beta = 1
+pvals[1] = rbeta(1, p_alpha, p_beta)
+
+param1_mu_0 = 0
+param1_lambda_0 = 0.1
+param1_alpha_0 = 1
+param1_beta_0 = 1
+
+param2_mu_0 = 0
+param2_lambda_0 = 0.1
+param2_alpha_0 = 1
+param2_beta_0 = 1
+
+samples = matrix(rep(NA, 4 * iter), ncol = 4)
+samples[1,] = c(rnorm(1, 0, sqrt(10)), rgamma(1, 1, 1), rnorm(1, 0, sqrt(10)), rgamma(1, 1, 1))
+```
+
+
+
+```{r}
+for(i in 2:iter){
+  
+  #update z
+  for (j in 1:n){
+    p_prop1 = dnorm(xvals[j], samples[i-1, 1], sd = sqrt(samples[i-1, 2])) * pvals[i-1]
+    p_prop2 = dnorm(xvals[j], samples[i-1, 3], sd = sqrt(samples[i-1, 4])) * (1 - pvals[i-1])
+    
+    p_z2 = p_prop2 / (p_prop1 + p_prop2)
+    
+    z_aux[j] = rbinom(1, 1, p_z2) + 1
+  }
+  
+  #update p
+  p_alpha = length(z_aux[z_aux == 2])
+  p_beta = length(z_aux[z_aux == 1])
+  pvals[i] = rbeta(1, p_alpha, p_beta)
+  pvals[i]
+  
+  #update mu1, sigma1
+  x_zval1 = xvals[z_aux == 1]
+  n1 = length(x_zval1)
+  mean1 = mean(x_zval1)
+  svar1 = mean((x_zval1 - mean1)^2)
+
+  param1_mu = ((param1_lambda_0 * param1_mu_0) + (n1 * mean1)) / (param1_lambda_0 + n1)
+  param1_lambda = param1_lambda_0 + n1
+  param1_alpha = param1_alpha_0 + n1 / 2 
+  param1_beta = param1_beta_0 + (0.5 * n1 * svar1) + (0.5 * (param1_lambda_0 * n1) * (mean1 - param1_mu_0)^2 / (param1_lambda_0 + n1))
+
+  tau1 = rgamma(1, param1_alpha, param1_beta)
+  mu1 = rnorm(1, param1_mu, sd = 1/sqrt(param1_lambda * tau1))
+  
+  #update mu2, sigma2
+  x_zval2 = xvals[z_aux == 2]
+  n2 = length(x_zval2)
+  mean2 = mean(x_zval2)
+  svar2 = mean((x_zval2 - mean2)^2)
+  
+  param2_mu = ((param2_lambda_0 * param2_mu_0) + (n2 * mean2)) / (param2_lambda_0 + n2)
+  param2_lambda = param2_lambda_0 + n2
+  param2_alpha = param2_alpha_0 + n2 / 2 
+  param2_beta = param2_beta_0 + (0.5 * n2 * svar2) + (0.5 * (param2_lambda_0 * n2) * (mean2 - param2_mu_0)^2 / (param2_lambda_0 + n2))
+  
+  tau2 = rgamma(1, param2_alpha, param2_beta)
+  mu2 = rnorm(1, param2_mu, sd = 1/sqrt(param2_lambda * tau2))
+  
+  samples[i,] = c(mu1, 1/sqrt(tau1), mu2, 1/sqrt(tau2))
+}
+```
+
+
+```{r}
+pairs(samples[-(1:1000),], main = 'Gaussian Mixture Model, Gibbs Sampler', labels = c('mu1', 'var1', 'mu2', 'var2'))
+
+hist(pvals[-(1:1000)], probability = T, main = 'Samples of p1', xlab = 'p_1')
+
+plot(samples[-(1:1000),1], samples[-(1:1000),3], xlab = 'mu1', ylab = 'mu2', main = 'Component Means of Gaussian Mixture Model')
+```
+
+
+```{r}
+par(mfrow = c(2,2), oma = c(0,0,2,0))
+hist(samples[-(1:1000),1],  breaks = 50, xlab = 'mu1', main = 'mu1', probability = T)
+hist(samples[-(1:1000),2],  breaks = 50, xlab = 'var1', main = 'var1', probability = T)
+hist(samples[-(1:1000),3],  breaks = 50, xlab = 'mu2', main = 'mu2', probability = T)
+hist(samples[-(1:1000),4],  breaks = 50, xlab = 'var2', main = 'var2', probability = T)
+mtext('Marginal Distributions of Samples', outer = TRUE, cex = 1.25)
+```
+
+
+
+Hamiltonian MC
+
+```{r}
+set.seed(2023)
+
+# automatically cache compiled model as .RDS file
+rstan_options(auto_write = TRUE)
+# specify number of cores
+options(mc.cores = 1)
+
+data = list(
+  N = n,
+  x = xvals
+)
+
+fit <- stan(
+  file = "gmm.stan",
+  data = data,
+  chains = 4,
+  iter = 10000,
+  refresh = 2000
+)
+```
+
+
+```{r}
+print(fit)
+```
+
+
+```{r}
+mu1 = extract(fit, pars = 'mu1', permuted = TRUE)$'mu1'
+mu2 = extract(fit, pars = 'mu2', permuted = TRUE)$'mu2'
+sigma1 = extract(fit, pars = 'sigma1', permuted = TRUE)$'sigma1'
+sigma2 = extract(fit, pars = 'sigma2', permuted = TRUE)$'sigma2'
+```
+
+```{r}
+plot(mu1, mu2, main = 'Component Means from Hamiltonian MC')
+```
+
+
+```{r}
+plot(mu1, col = 'black', main = 'Traceplots of mu1 and mu2')
+points(mu2, col = 'blue')
+legend(x = 17000, y = 0.95, legend=c("mu1", "mu2"), fill = c('black', 'blue'))
+```
+
+
+
+

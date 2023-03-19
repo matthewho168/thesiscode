@@ -1,0 +1,197 @@
+---
+title: "Logistic Regression Posterior"
+output: pdf_document
+date: "2023-03-10"
+header-includes:
+- \newcommand{\Normal}{\mathcal{N}}
+---
+
+
+```{r, echo = FALSE, verbose = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, cache = TRUE, warning = FALSE, fig.align = 'center')
+
+library('BayesLogit')
+library('mvtnorm')
+library('rstan')
+library('ggplot2')
+```
+
+
+```{r}
+#Data generation.
+set.seed(2023)
+
+# Set n = 50.
+n = 50
+
+# Generate X as iid N(0,1) and Y as iid Bern(0.5)
+xvals = rnorm(n, 0, 1)
+yvals = rbinom(n, 1, 0.5)
+```
+
+
+Metropolis-Hastings Sampler
+
+```{r}
+# Assume p(alpha) and p(beta) are iid N(0,100).
+prior = function(x){
+  return (dnorm(x, mean = 0, sd = 10))
+}
+
+# Log-likelihood function
+logli = function(theta){
+  alpha = theta[1]
+  beta = theta[2]
+  sum = 0
+  for (j in 1:n){
+    inter = alpha + (beta * xvals[j])
+    temp = (yvals[j] * inter) - log(1 + exp(inter))
+    sum = sum + temp
+  }
+  sum
+}
+
+# Posterior density
+posterior = function(theta){
+  return ( exp(logli(theta)) * prior(theta[1]) * prior(theta[2]) )
+}
+
+# Log-posterior density
+log_post = function(theta){
+  return (logli(theta) + log(prior(theta[1])) + log(prior(theta[2])) ) 
+}
+```
+
+```{r}
+set.seed(2023)
+dim = 2
+trials = 10000
+samples_mh = matrix(rep(0, dim * trials), ncol = dim)
+samples_mh[1,] = c(2,1)
+
+count = 0
+
+for (i in 2:trials){
+  curr = samples_mh[i-1,]
+  prop = rmvnorm(1, mean = curr, sigma = 0.3 * diag(dim))
+  acce = exp (log_post(prop) - log_post(curr))
+  if(runif(1) < acce){
+    curr = prop
+    count = count + 1
+  }
+  samples_mh[i,] = curr
+}
+```
+
+
+```{r}
+ticks = 100
+x_ax = seq(-2, 2, length.out=ticks)
+y_ax = x_ax
+
+z = matrix(0, nrow=ticks, ncol=ticks)
+
+for (i in 1:ticks){
+  for (j in 1:ticks){
+    x = x_ax[i]
+    y = y_ax[j]
+    z[i,j] = posterior(c(x,y))
+  }
+}
+```
+
+
+```{r}
+plot(samples_mh, col = rgb(red = 0, green = 0.5, blue = 1, alpha = 0.25), xlab = 'alpha', ylab = 'beta', main = 'Logistic Regression Posterior, Metropolis-Hastings')
+contour(x_ax, y_ax, z, col = 'black', add=T, labcex = 1.0)
+
+mean(samples_mh[,1])
+mean(samples_mh[,2])
+```
+
+\newpage
+
+Gibbs sampler (Polson, et al 2013)
+
+```{r}
+set.seed(2023)
+dim = 2
+trials = 10000
+samples_g = matrix(rep(0, dim * trials), ncol = dim)
+#xvals and yvals are as above
+
+xmat = matrix(c(rep(1, n), xvals), nrow = n)
+kap = matrix(yvals - 0.5, nrow = n)
+
+b = rep(0, dim)
+B = diag(dim)
+
+Omega = diag(n)
+
+#initialise Beta
+samples_g[1,] = c(0, 0)
+
+for (i in 2:trials){
+  Beta = samples_g[i-1,]
+  for (j in 1:n){
+    Omega[j,j] = rpg(num = 1, 1, xmat[j, ] %*% Beta)
+  }
+  
+  V = solve( ( (t(xmat) %*% Omega %*% xmat) + solve(B) ) )
+  V = round(V, 10)
+  
+  m = as.vector(V %*% (t(xmat) %*% kap))
+  Beta = rmvnorm(1, m, V)
+  
+  samples_g[i,] = Beta
+}
+```
+
+```{r}
+plot(samples_g, col = rgb(red = 0, green = 0.5, blue = 1, alpha = 0.25), xlab = 'alpha', ylab = 'beta', main = 'Logistic Regression Posterior, Gibbs')
+contour(x_ax, y_ax, z, col = 'black', add=T, labcex = 1.0)
+
+mean(samples_g[,1])
+mean(samples_g[,2])
+```
+
+
+\newpage
+HMC
+
+
+```{r}
+# automatically cache compiled model as .RDS file
+rstan_options(auto_write = TRUE)
+# specify number of cores
+options(mc.cores = 1)
+
+data = list(
+  N = n,
+  x = xvals,
+  y = yvals
+)
+
+fit <- stan(
+  file = "logreg.stan",
+  data = data,
+  chains = 4,
+  refresh = 2000
+)
+
+```
+
+```{r}
+print(fit)
+```
+
+
+```{r}
+alpha = extract(fit, pars = 'alpha', permuted = TRUE)$alpha
+beta = extract(fit, pars = 'beta', permuted = TRUE)$beta
+```
+
+```{r}
+plot(alpha, beta, col = rgb(red = 0, green = 0.5, blue = 1, alpha = 0.5), main = 'Logistic Regression Posterior, Hamiltonian MC')
+contour(x_ax, y_ax, z, col = 'black', add=T, labcex = 1.0)
+```

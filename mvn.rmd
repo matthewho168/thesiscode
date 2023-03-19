@@ -1,0 +1,274 @@
+---
+title: "Multivariate Normals"
+output: pdf_document
+date: "2023-03-10"
+header-includes:
+- \newcommand{\Normal}{\mathcal{N}}
+---
+
+
+```{r, echo = FALSE, verbose = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align = 'center')
+
+library('mvtnorm')
+library('ggplot2')
+library('ggExtra')
+library('Matrix')
+```
+
+Here is a simple MH algorithm for bivariate normal with arbitrary mean and covariance.
+
+```{r}
+bvn_mh = function(mu1, mu2, var1, var2, cov){
+  mean = c(mu1, mu2)
+  covs = matrix(c(var1, cov,
+                  cov, var2),
+                nrow = 2, byrow = T)
+  
+  n = 10000
+  samples = matrix(rep(0, 2*n), ncol = 2)
+  samples[1,] = c(0,0)
+  
+  for (i in 2:n){
+    curr = samples[i-1,]
+    prop = c(runif(1, curr[1] - 1, curr[1] + 1), runif(1, curr[2]- 1, curr[2] + 1))
+    acce = dmvnorm(prop, mean, covs) / dmvnorm(curr, mean, covs)
+    if(runif(1) < acce) curr = prop
+    samples[i,] = curr
+  }
+  samples
+}
+```
+
+```{r}
+set.seed(2023)
+samples = bvn_mh(0, 0, 1, 1, 0.5)
+df_samples = data.frame(samples)
+
+plt = ggplot(df_samples, aes(samples[,1], samples[,2])) + geom_point() + xlab("X") + ylab("Y") + ggtitle('Samples from Bivariate Normal - Metropolis') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+
+\newpage
+We can try to generate a similar bivariate MVN (with arbitrary covariance) with a Gibbs sampler.
+
+```{r}
+#BVN gibbs
+bvn_gibbs = function(rho, n){
+  covs = matrix(c(1, rho, rho, 1), 2, 2)
+  sd = sqrt(1 - rho^2)
+  samples = matrix(rep(0, 2*n), ncol = 2)
+  
+  for (i in 2:n){
+    samples[i, 1] = rnorm(1, rho*samples[i-1, 2], sd)
+    samples[i, 2] = rnorm(1, rho*samples[i, 1], sd)
+  }
+  samples
+}
+```
+
+
+```{r}
+set.seed(2023)
+samples_0.5 = bvn_gibbs(0.5, 10000)
+df_samples = data.frame(samples_0.5)
+
+plt = ggplot(df_samples, aes(samples_0.5[,1], samples_0.5[,2])) + geom_point() + xlab("X") + ylab("Y") + ggtitle('Samples from Bivariate Normal - Gibbs') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+
+```{r}
+set.seed(2023)
+samples_0.9999 = bvn_gibbs(0.9999, 10000)
+df_samples = data.frame(samples_0.9999)
+
+plt = ggplot(df_samples, aes(samples_0.9999[,1], samples_0.9999[,2])) + geom_point() + xlim(-3,3) + ylim(-3,3) + xlab("X") + ylab("Y") + ggtitle('Samples from Bivariate Normal - High Covariance') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+
+```{r}
+plot(samples_0.5[,1], col = 'grey', ylab = 'X', main = "Traceplot of X from Bivariate Normals")
+points(samples_0.9999[,1], col = 'black')
+legend(x = "topleft", title = 'Covariance', legend=c("0.5", "0.9999"), fill = c('grey', 'black'))
+```
+
+
+- - -
+
+We move into higher dimensions. First, a MH algorithm for generating MVN samples.
+
+```{r}
+dim = 5
+high_dim_mvn_mh = function(var){
+  n = 10000
+  samples = matrix(rep(0, dim * n), ncol = dim)
+  samples[1,] = rep(0, dim)
+  count = 0
+  
+  mean = rep(0,dim)
+  covs = diag(dim)
+  covs[1,1] = var
+  
+  for (i in 2:n){
+    curr = samples[i-1,]
+    prop = rmvnorm(1, mean = curr, sigma = diag(dim))
+    acce = exp (log (dmvnorm(prop, mean, covs)) - log(dmvnorm(curr, mean, covs)))
+    if(runif(1) < acce){
+      curr = prop
+      count = count + 1
+    }
+    samples[i,] = curr
+  }
+  list(samples, count/n)
+}
+```
+
+```{r}
+set.seed(2023)
+output = high_dim_mvn_mh(1)
+
+samples = output[[1]]
+acc_rate = output[[2]]
+
+pairs(samples, main = 'Multivariate Normal in 5 Dimensions', labels = c('X1', 'X2', 'X3', 'X4', 'X5'))
+
+acc_rate
+```
+
+\newpage
+Now, a Gibbs one.
+
+```{r}
+dim = 5
+mean = rep(0, dim)
+covs = matrix(c(1,0.3,0.9,0.7,0,
+                0.3,1,0,0,0,
+                0.9,0,1,0.7,0,
+                0.7,0,0.7,1,0,
+                0,0,0,0,1), nrow = 5, byrow = T)
+
+``` 
+
+```{r}
+mvn_gibbs = function(covs){
+  n = 10000
+  samples = matrix(rep(0, dim * n), ncol = dim)
+  
+  recent = rep(0, dim)
+  
+  for (i in 2:n){
+    for (j in 1:dim){
+      ind = setdiff(1:dim, j)
+      
+      cov11 = covs[j,j] 
+      cov12 = matrix(covs[j, ind], nrow = 1)
+      cov21 = matrix(covs[ind, j], nrow = dim-1)
+      cov22 = covs[ind, ind]
+      
+      mu = mean[j] + (cov12 %*% solve(cov22) %*% (recent[ind] - mean[ind]))[1,1] 
+      sig = cov11 - (cov12 %*% solve(cov22) %*% cov21)[1,1]
+      draw = rnorm(1, mu, sd = sqrt(sig))
+      samples[i, j] = draw
+      recent[j] = samples[i, j]
+    }
+  }
+  samples
+}
+```
+
+
+```{r}
+set.seed(2023)
+samples = mvn_gibbs(covs)
+
+pairs(samples, main = 'Multivariate Normal in 5 Dimensions', labels = c('X1', 'X2', 'X3', 'X4', 'X5'))
+```
+
+```{r}
+df_samples = data.frame(samples)
+plt = ggplot(df_samples, aes(samples[,3], samples[,4])) + geom_point() + xlab("X3") + ylab("X4") + ggtitle('Joint Distribution of X3 and X4') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+- - -
+
+\newpage
+
+We now consider a high dim MVN case with the identity matrix as the covariance, except the variance of the first component will be 0.0001 or 10000 to create an imbalance of scale. 
+
+
+We'll use MH first. Note that the rejection rate is extremely high, which is why the plot looks so sparse.
+
+```{r}
+set.seed(2023)
+output_small_var = high_dim_mvn_mh(0.0001)
+
+samples = output_small_var[[1]]
+acc_rate = output_small_var[[2]]
+
+pairs(samples, main = 'Multivariate Normal in 5 Dimensions', labels = c('X1', 'X2', 'X3', 'X4', 'X5'))
+
+acc_rate
+```
+
+For the big variance, the distribution of the first component is strange. This is because it has not really been able to explore the huge sample space effectively.
+
+```{r}
+set.seed(2023)
+output_big_var = high_dim_mvn_mh(10000)
+
+samples = output_big_var[[1]]
+acc_rate = output_big_var[[2]]
+pairs(samples, main = 'Multivariate Normal in 5 Dimensions', labels = c('X1', 'X2', 'X3', 'X4', 'X5'))
+
+acc_rate
+```
+
+
+```{r}
+df_samples = data.frame(samples)
+plt = ggplot(df_samples, aes(df_samples[,1], df_samples[,2])) + geom_point() + xlab("X1") + ylab("X2") + ggtitle('Joint Distribution of X1 and X2') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+
+df_samples = data.frame(samples)
+plt = ggplot(df_samples, aes(df_samples[,1], df_samples[,2])) + geom_point() + xlim(-300, 300) + xlab("X1") + ylab("X2") + ggtitle('Joint Distribution of X1 and X2') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+\newpage
+Now, we implement with Gibbs.
+```{r}
+covs = diag(dim)
+covs[1,1] = 0.0001
+
+set.seed(2023)
+samples = mvn_gibbs(covs)
+
+pairs(samples, main = 'Multivariate Normal in 5 Dimensions', labels = c('X1', 'X2', 'X3', 'X4', 'X5'))
+```
+
+```{r}
+df_samples = data.frame(samples)
+plt = ggplot(df_samples, aes(df_samples[,1], df_samples[,2])) + geom_point() + xlab("X1") + ylab("X2") + ggtitle('Joint Distribution of X1 and X2') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+```{r}
+covs = diag(dim)
+covs[1,1] = 10000
+
+set.seed(2023)
+samples = mvn_gibbs(covs)
+pairs(samples, main = 'Multivariate Normal in 5 Dimensions', labels = c('X1', 'X2', 'X3', 'X4', 'X5'))
+```
+
+```{r}
+df_samples = data.frame(samples)
+plt = ggplot(df_samples, aes(df_samples[,1], df_samples[,2])) + geom_point() + xlab("X1") + ylab("X2") + ggtitle('Joint Distribution of X1 and X2') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+

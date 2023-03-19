@@ -1,0 +1,453 @@
+---
+title: "basic_MH"
+output: pdf_document
+date: "2023-03-10"
+header-includes:
+- \newcommand{\Normal}{\mathcal{N}}
+- \newcommand{\R}{\mathbb{R}}
+---
+
+
+```{r, echo = FALSE, verbose = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, cache = TRUE, warning = FALSE, fig.align = 'center')
+library('mvtnorm')
+library('coda')
+library('ggplot2')
+library('ggExtra')
+library("scatterplot3d") 
+```
+
+
+\textbf{Some Basic Distributions}
+
+Our target distribution will be Gamma(3,2).
+
+```{r}
+gamma_pdf = function(x, a, lambda){
+  if(x < 0){
+    return (0)
+  }
+  return ((lambda * x)^a * exp(-lambda * x) / gamma(a) / x)
+}
+```
+
+
+We'll first use a Normal distribution centered around the current state as the proposal distribution. (Note that the transition kernel is symmetric.) [Random Walk Metropolis Hastings]
+
+```{r}
+gamma_mh_normal = function(init){
+  n = 10000
+  samples = rep(NA, n)
+  state = init
+  samples[1] = state
+  count = 0
+  
+  for (i in 2:n){
+    curr = state
+    prop = rnorm(1, curr, 1)
+    acce = gamma_pdf(prop, 3, 2) / gamma_pdf(curr, 3, 2)
+      if(runif(1) < acce){
+      state = prop
+      count = count + 1
+    }
+    samples[i] = state
+  }
+  return (list(samples, count / n))
+}
+```
+
+```{r}
+set.seed(2023)
+gamma_norm_1_raw = gamma_mh_normal(1)
+samples_norm1 = gamma_norm_1_raw[[1]]
+acc_rate_norm1 = gamma_norm_1_raw[[2]]
+
+hist(samples_norm1, probability = T, ylim = c(0, 0.6), breaks = 50, xlab = 'X', main = 'Samples from Gamma(3,2) with Normal Proposals')
+xvals = seq(0, 20, 0.05)
+lines(xvals, sapply(xvals, gamma_pdf, a = 3, lambda = 2), col = "blue")
+
+acc_rate_norm1
+```
+
+
+We can also use a Uniform distribution as the proposal.
+
+```{r}
+gamma_mh_unif = function(init){
+  n = 10000
+  samples = rep(NA, n)
+  state = init
+  samples[1] = state
+  count = 0
+  
+  for (i in 2:n){
+    curr = state
+    prop = runif(1, curr - 1, curr + 1)
+    acce = gamma_pdf(prop, 3, 2) / gamma_pdf(curr, 3, 2)
+    if(runif(1) < acce){
+      state = prop
+      count = count + 1
+    }
+    samples[i] = state
+  }
+  list(samples, count / n)
+}
+```
+
+
+```{r}
+set.seed(2023)
+gamma_unif_1_raw = gamma_mh_unif(1)
+samples_unif1 = gamma_unif_1_raw[[1]]
+acc_rate_unif1 = gamma_unif_1_raw[[2]]
+
+hist(samples_unif1, probability = T, ylim = c(0, 0.6), breaks = 50, xlab = 'X', main = 'Samples from Gamma(3,2) with Uniform Proposals')
+xvals = seq(0, 20, 0.05)
+lines(xvals, sapply(xvals, gamma_pdf, a = 3, lambda = 2), col = "blue")
+
+acc_rate_unif1
+```
+
+```{r}
+# samples_unif1 as defined above
+set.seed(2023)
+samples_unif1 = mcmc(samples_unif1)
+samples_unif3 = mcmc(gamma_mh_unif(3)[[1]])
+samples_unif5 = mcmc(gamma_mh_unif(5)[[1]])
+samples_unif7 = mcmc(gamma_mh_unif(7)[[1]])
+
+chains = list(samples_unif1, samples_unif3, samples_unif5, samples_unif7)
+```
+
+```{r}
+grdiag = gelman.diag(chains, confidence = 0.95, transform=FALSE, autoburnin=TRUE,
+                   multivariate=TRUE)
+grdiag
+```
+
+
+```{r}
+gelman.plot(chains, xlab = 'Last Iteration in Chain', ylab = 'G-R Diagnostic', main = 'Gelman-Rubin Statistic vs. n')
+```
+
+- - -
+
+Multimodal mixture distribution
+
+We can consider a simple multimodal pdf in 1 dimension. We can consider how far we want to jump. Small jumps might lead to poor exploration of the target space, while big jumps lead to high rejection rates. Also we can consider a uniform proposal distribution and its rejection rate.
+
+Sampling from
+
+$$\theta \sim \frac{1}{3}\Normal(-10,1) + \frac{1}{3} \Normal(0,1) + \frac{1}{3}\Normal(10,1)$$
+```{r}
+# 3 normals with three modes
+target_MMnorm = function(x){
+  ans = dnorm(x, 0, 1) + dnorm(x, 10, 1) + dnorm(x, -10, 1)
+  return (ans / 3)
+}
+```
+
+
+```{r}
+step_MH_1 = function(init, var){
+  n = 10000
+  samples = rep(NA, n)
+  state = init
+  samples[1] = state
+  for(i in 2:n){
+    curr = samples[i-1]
+    prop = rnorm(1, curr, sd = sqrt(var))
+    acc = target_MMnorm(prop) / target_MMnorm(curr)
+    if (runif(1) < acc) state = prop
+    samples[i] = state
+  }
+  samples
+}
+
+step_MH_1_long = function(init, var){
+  n = 50000
+  samples = rep(NA, n)
+  state = init
+  samples[1] = state
+  for(i in 2:n){
+    curr = samples[i-1]
+    prop = rnorm(1, curr, sd = sqrt(var))
+    acc = target_MMnorm(prop) / target_MMnorm(curr)
+    if (runif(1) < acc) state = prop
+    samples[i] = state
+  }
+  samples
+}
+
+step_MH_2 = function(init){
+  n = 10000
+  samples = rep(NA, n)
+  state = init
+  samples[1] = state
+  for(i in 2:n){
+    curr = samples[i-1]
+    prop = runif(1, curr - 20, curr + 20)
+    acc = target_MMnorm(prop) / target_MMnorm(curr)
+    if (runif(1) < acc) state = prop
+    samples[i] = state
+  }
+  samples
+}
+```
+
+```{r}
+set.seed(2023)
+samples_1 = step_MH_1(0, 1)
+
+hist(samples_1, probability = T, breaks = 50, xlim=c(-30,30), xlab = 'X', main = 'Samples from Mixture of Normals')
+x_vals = seq(-25, 25, 0.1)
+lines(x_vals, sapply(x_vals, target_MMnorm), col = "blue")
+```
+
+
+```{r}
+set.seed(2023)
+samples_1 = step_MH_1(0, 5)
+
+hist(samples_1, probability = T, breaks = 50, xlim=c(-30,30), xlab = 'X', main = 'Samples from Mixture of Normals')
+x_vals = seq(-25, 25, 0.1)
+lines(x_vals, sapply(x_vals, target_MMnorm), col = "blue")
+```
+
+
+```{r}
+plot(samples_1, ylab = 'X', main = 'Traceplot of Samples from Mixture of Normals')
+```
+
+
+```{r}
+set.seed(2023)
+samples_2 = step_MH_1(0, 10)
+
+hist(samples_2, probability = T, breaks = 50, xlim=c(-30,30), xlab = 'X', main = 'Samples from Mixture of Normals')
+x_vals = seq(-25, 25, 0.1)
+lines(x_vals, sapply(x_vals, target_MMnorm), col = "blue")
+```
+
+```{r}
+plot(samples_2, ylab = 'X', main = 'Traceplot of Samples from Mixture of Normals')
+```
+
+
+```{r}
+set.seed(2023)
+diag_1 = mcmc(step_MH_1(0, 10))
+diag_2 = mcmc(step_MH_1(10, 10))
+diag_3 = mcmc(step_MH_1(-10, 10))
+diag_4 = mcmc(step_MH_1(25, 10))
+diag_5 = mcmc(step_MH_1(-25, 10))
+
+chains = list(diag_1, diag_2, diag_3, diag_4, diag_5)
+```
+
+```{r}
+grdiag = gelman.diag(chains, confidence = 0.95, transform=FALSE, autoburnin=TRUE,
+                   multivariate=TRUE)
+grdiag
+```
+
+
+```{r}
+gelman.plot(chains, xlab = 'Last Iteration in Chain', ylab = 'G-R Diagnostic', main = 'Gelman-Rubin Statistic vs. n')
+```
+
+
+```{r}
+set.seed(2023)
+diag_1 = mcmc(step_MH_1_long(0, 10))
+diag_2 = mcmc(step_MH_1_long(10, 10))
+diag_3 = mcmc(step_MH_1_long(-10, 10))
+diag_4 = mcmc(step_MH_1_long(25, 10))
+diag_5 = mcmc(step_MH_1_long(-25, 10))
+chains = list(diag_1, diag_2, diag_3, diag_4, diag_5)
+
+grdiag = gelman.diag(chains, confidence = 0.95, transform=FALSE, autoburnin=TRUE,
+                   multivariate=TRUE)
+grdiag
+
+```
+
+```{r}
+samples_3 = step_MH_2(0)
+hist(samples_3, probability = T, breaks = 50)
+x_vals = seq(-25, 25, 0.1)
+lines(x_vals, sapply(x_vals, target_MMnorm), col = "blue")
+```
+
+```{r}
+diag_1 = mcmc(step_MH_2(0))
+diag_2 = mcmc(step_MH_2(10))
+diag_3 = mcmc(step_MH_2(-10))
+diag_4 = mcmc(step_MH_2(25))
+diag_5 = mcmc(step_MH_2(-25))
+
+chains = list(diag_1, diag_2, diag_3, diag_4, diag_5)
+```
+
+```{r}
+grdiag = gelman.diag(chains, confidence = 0.95, transform=FALSE, autoburnin=TRUE,
+                   multivariate=TRUE)
+grdiag
+```
+
+
+```{r}
+gelman.plot(chains, xlab = 'Last Iteration in Chain', ylab = 'G-R Diagnostic', main = 'Gelman-Rubin Statistic vs. n')
+```
+
+- - -
+
+Here's another multimodal distribution (taken from Dobrow 5.18). The target distribution has pdf (up to normalisation) 
+$$f(x) \propto e^{-(x-1)^2/2} + e^{-(x-4)^2/2},\text{ for } 0<x<5.$$
+
+
+```{r}
+# proportional mixture dist
+set.seed(2023)
+
+target_mix = function(x){
+  ans = exp(-(x-1)^2/2) + exp(-(x-4)^2/2)
+  ans
+}
+
+norm = integrate(target_mix, lower = 0, upper = 5)$value
+
+n = 10000
+simlist = rep(NA, n)
+state = 1
+simlist[1] = state
+for (i in 2:n){
+  prop = runif(1, 0, 5)
+  acc <- target_mix(prop) / target_mix(state)
+  if (runif(1) < acc) state = prop
+  simlist[i] = state
+}
+
+hist(simlist, xlab="X", ylim = c(0, 0.27), main="Samples from an Unnormalised Density", breaks = 30, probability = T)
+x_vals = seq(0,5,0.02)
+lines(x_vals, sapply(x_vals, function(x) (target_mix(x) / norm)), col = "blue")
+```
+
+This is a simple Gibbs sampler where the conditional distributions are named distributions (Dobrow 5.17). Our target distribution has pdf (up to normalisation)
+$$f(x,k) \propto \frac{e^{-3x}x^k}{k!},\text{ for } k = 0,\;1,\;2,\; \ldots \text{ and } x>0. $$
+
+```{r}
+set.seed(2023)
+n = 10000
+samples = matrix(rep(0, 2*n), ncol=2)
+
+for (i in 2:n){
+  samples[i,1] = rgamma(1, samples[i-1, 2] + 1, 3)
+  samples[i,2] = rpois(1, samples[i, 1])
+}
+
+df_samples = data.frame(samples)
+plt = ggplot(df_samples, aes(samples[,1], samples[,2])) + geom_point() + xlab("X") + ylab("K") + ggtitle('Samples from Joint Distribution of X and K') + theme(plot.title = element_text(hjust = 0.5)) + theme(plot.title = element_text(vjust = -.25))
+ggMarginal(plt, type="histogram")
+```
+
+
+
+\textbf{Torus}
+We want to sample from a distribution in R3 but concentrated near the surface of a torus. The density at $\theta = (\theta_1, \theta_2, \theta_3)$ is given by 
+$$
+p(\theta) \propto 
+\left[
+\left\{1-(\theta_1^2+\theta_2^2)^{1/2}\right\}^2 + \theta_3 ^2
+\right] ^{1/2} 
+\exp\left[
+\left\{ -\lambda^{-1} \left|\left\{1-(\theta_1^2+\theta_2^2)^{1/2}\right\}^2 + \theta_3 ^2 -\frac{1}{4} \right| \right\} \right].
+$$
+
+```{r}
+target_pdf = function(theta, lambda){
+  x1 = theta[1]
+  x2 = theta[2]
+  x3 = theta[3]
+  temp = ( 1 - (x1^2 + x2^2) )^2 + x3^2
+  ans = temp^(0.5) * exp(-lambda^{-1} * abs(temp - 0.25))
+}
+```
+
+```{r}
+torus_mh = function(lambda){
+  n = 10000
+  samples = matrix(rep(0, 3 * n), ncol = 3)
+  
+  count = 0
+  for (i in 2:n){
+    curr = samples[i-1,]
+    prop = rmvnorm(1, mean = curr, sigma = 0.1 * diag(3))
+    acce = exp( log(target_pdf(prop, lambda)) - log(target_pdf(curr, lambda)))
+    if(runif(1) < acce){
+      curr = prop
+      count = count + 1
+    }
+    samples[i,] = curr
+  }
+  
+  list(samples, count/n)
+}
+```
+
+
+```{r}
+set.seed(2023)
+samples_0.1 = torus_mh(0.1)
+samples = samples_0.1[[1]]
+acc_rate = samples_0.1[[2]]
+
+scatterplot3d(samples, angle = 80, xlab = 'theta_1', ylab = 'theta_2', zlab = 'theta_3')
+pairs(samples, labels = c('theta_1', 'theta_2', 'theta_3'))
+
+acc_rate
+```
+
+
+```{r}
+set.seed(2023)
+samples_0.005 = torus_mh(0.005)
+samples = samples_0.005[[1]]
+acc_rate = samples_0.005[[2]]
+
+scatterplot3d(samples, angle = 80, xlab = 'theta_1', ylab = 'theta_2', zlab = 'theta_3')
+pairs(samples, labels = c('theta_1', 'theta_2', 'theta_3'))
+
+acc_rate
+```
+
+```{r}
+torus_mh_extension = function(lambda, n, cov_scale){
+  samples = matrix(rep(0, 3 * n), ncol = 3)
+  
+  count = 0
+  for (i in 2:n){
+    curr = samples[i-1,]
+    prop = rmvnorm(1, mean = curr, sigma = cov_scale * diag(3))
+    acce = exp( log(target_pdf(prop, lambda)) - log(target_pdf(curr, lambda)))
+    if(runif(1) < acce){
+      curr = prop
+      count = count + 1
+    }
+    samples[i,] = curr
+  }
+  
+  list(samples, count/n)
+}
+
+```
+
+```{r}
+set.seed(2023)
+samples_0.005_fix = torus_mh_extension(0.005, 25000, 0.01)
+samples = samples_0.005_fix[[1]]
+
+scatterplot3d(samples, angle = 80, xlab = 'theta_1', ylab = 'theta_2', zlab = 'theta_3')
+pairs(samples)
+```
+
