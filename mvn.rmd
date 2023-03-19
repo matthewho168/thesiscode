@@ -1,9 +1,6 @@
 ---
 title: "Multivariate Normals"
 output: pdf_document
-date: "2023-03-10"
-header-includes:
-- \newcommand{\Normal}{\mathcal{N}}
 ---
 
 
